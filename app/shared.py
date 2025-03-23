@@ -4,6 +4,9 @@ Shared resources used across the application
 
 import os
 from dotenv import load_dotenv
+import asyncio
+
+STOP_RECORDING = asyncio.Event()
 
 load_dotenv()
 

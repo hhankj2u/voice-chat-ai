@@ -19,7 +19,7 @@ import re
 import io
 import torch
 from pydub import AudioSegment
-from .shared import clients
+from .shared import clients, STOP_RECORDING
 
 import logging
 logging.getLogger("transformers").setLevel(logging.ERROR)  # transformers 4.48+ warning
@@ -42,7 +42,7 @@ OLLAMA_MODEL = os.getenv('OLLAMA_MODEL')
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL')
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
 ELEVENLABS_TTS_VOICE = os.getenv('ELEVENLABS_TTS_VOICE')
-XTTS_SPEED = os.getenv('XTTS_SPEED', '1.1') 
+XTTS_SPEED = os.getenv('XTTS_SPEED', '1.1')
 os.environ["COQUI_TOS_AGREED"] = "1"
 
 # Initialize OpenAI API key
@@ -112,7 +112,7 @@ def init_openai_model(model_name):
     global OPENAI_MODEL
     OPENAI_MODEL = model_name
     print(f"Switched to OpenAI model: {model_name}")
-    
+
 def init_xai_model(model_name):
     global XAI_MODEL
     XAI_MODEL = model_name
@@ -160,7 +160,7 @@ def init_set_provider(set_provider):
     global MODEL_PROVIDER
     MODEL_PROVIDER = set_provider
     print(f"Switched to Model Provider: {set_provider}")
-    
+
 
 # Function to display ElevenLabs quota
 def display_elevenlabs_quota():
@@ -180,7 +180,7 @@ def display_elevenlabs_quota():
 
 if TTS_PROVIDER == "elevenlabs":
     display_elevenlabs_quota()
-    
+
 # Function to open a file and return its contents as a string
 def open_file(filepath):
     with open(filepath, 'r', encoding='utf-8') as infile:
@@ -193,14 +193,14 @@ async def play_audio(file_path):
 def sync_play_audio(file_path):
     print("Starting audio playback")
     file_extension = Path(file_path).suffix.lstrip('.').lower()
-    
+
     temp_wav_path = os.path.join(output_dir, 'temp_output.wav')
-    
+
     if file_extension == 'mp3':
         audio = AudioSegment.from_mp3(file_path)
         audio.export(temp_wav_path, format="wav")
         file_path = temp_wav_path
-    
+
     wf = wave.open(file_path, 'rb')
     p = pyaudio.PyAudio()
     stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
@@ -312,7 +312,7 @@ async def openai_text_to_speech(prompt, output_path):
 
 async def fetch_pcm_audio(model: str, voice: str, input_text: str, api_url: str, session: aiohttp.ClientSession) -> bytes:
     pcm_data = io.BytesIO()
-    
+
     try:
         async with session.post(
             url=api_url,
@@ -463,7 +463,7 @@ def chatgpt_streamed(user_input, system_message, mood_prompt, conversation_histo
         except requests.exceptions.RequestException as e:
             full_response = f"Error connecting to Ollama model: {e}"
             print(f"Debug: Ollama error - {e}")
-    
+
     elif MODEL_PROVIDER == 'xai':
         messages = [{"role": "system", "content": system_message + "\n" + mood_prompt}] + conversation_history + [{"role": "user", "content": user_input}]
         headers = {
@@ -566,7 +566,7 @@ def detect_silence(data, threshold=1000, chunk_size=1024):   # threshold is More
     audio_data = np.frombuffer(data, dtype=np.int16)
     return np.mean(np.abs(audio_data)) < threshold
 
-async def record_audio(file_path, silence_threshold=512, silence_duration=2.5, chunk_size=1024):  # 2.0 seconds of silence adjust as needed, if not picking up your voice increase to 4.0
+async def record_audio(file_path, silence_threshold=512, silence_duration=3, chunk_size=1024):  # 2.0 seconds of silence adjust as needed, if not picking up your voice increase to 4.0
     p = pyaudio.PyAudio()
     stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=chunk_size)
     frames = []
@@ -586,6 +586,9 @@ async def record_audio(file_path, silence_threshold=512, silence_duration=2.5, c
             speaking_chunks += 1
         if speaking_chunks > silence_duration * (16000 / chunk_size) * 10:
             break
+        if STOP_RECORDING.is_set():
+            STOP_RECORDING.clear()
+            break
     print("Recording stopped.")
     await send_message_to_clients(json.dumps({"action": "recording_stopped"}))  # Notify frontend
     stream.stop_stream()
@@ -600,7 +603,7 @@ async def record_audio(file_path, silence_threshold=512, silence_duration=2.5, c
 
 async def execute_once(question_prompt):
     temp_image_path = os.path.join(output_dir, 'temp_img.jpg')
-    
+
     # Determine the audio file format based on the TTS provider
     if TTS_PROVIDER == 'elevenlabs':
         temp_audio_path = os.path.join(output_dir, 'temp_audio.mp3')  # Use mp3 for ElevenLabs
@@ -640,7 +643,7 @@ async def execute_screenshot_and_analyze():
     print("Taking screenshot and analyzing...")
     await execute_once(question_prompt)
     print("\nReady for the next question....")
-    
+
 async def take_screenshot(temp_image_path):
     await asyncio.sleep(5)
     screenshot = ImageGrab.grab()
@@ -656,11 +659,11 @@ async def encode_image(image_path):
 # Analyze Image
 async def analyze_image(image_path, question_prompt):
     encoded_image = await encode_image(image_path)
-    
+
     if MODEL_PROVIDER == 'ollama':
         headers = {'Content-Type': 'application/json'}
         payload = {
-            "model": "llava",
+            "model": "llava:7b-v1.6-vicuna-q4_K_S",
             "prompt": question_prompt,
             "images": [encoded_image],
             "stream": False
@@ -679,7 +682,7 @@ async def analyze_image(image_path, question_prompt):
         except aiohttp.ClientError as e:
             print(f"Request failed: {e}")
             return {"choices": [{"message": {"content": "Failed to process the image with the llava model."}}]}
-    
+
     elif MODEL_PROVIDER == 'xai':
         # First, try XAI's image analysis if it's supported
         headers = {
@@ -699,7 +702,7 @@ async def analyze_image(image_path, question_prompt):
             "messages": [message],
             "max_tokens": 1000
         }
-        
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"{XAI_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=30) as response:
@@ -713,7 +716,7 @@ async def analyze_image(image_path, question_prompt):
         except aiohttp.ClientError as e:
             print(f"XAI image analysis failed: {e}, falling back to OpenAI")
             return await fallback_to_openai_image_analysis(encoded_image, question_prompt)
-    
+
     else:  # OpenAI as default
         return await fallback_to_openai_image_analysis(encoded_image, question_prompt)
 
@@ -736,7 +739,7 @@ async def fallback_to_openai_image_analysis(encoded_image, question_prompt):
         "messages": [message],
         "max_tokens": 1000
     }
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as response:
@@ -782,15 +785,15 @@ async def generate_speech(text, temp_audio_path):
 async def user_chatbot_conversation():
     conversation_history = []
     base_system_message = open_file(character_prompt_file)
-    
+
     quit_phrases = ["quit", "Quit", "Quit.", "Exit.", "exit", "Exit", "leave", "Leave."]
     screenshot_phrases = [
-        "what's on my screen", 
-        "take a screenshot", 
-        "show me my screen", 
-        "analyze my screen", 
-        "what do you see on my screen", 
-        "screen capture", 
+        "what's on my screen",
+        "take a screenshot",
+        "show me my screen",
+        "analyze my screen",
+        "what do you see on my screen",
+        "screen capture",
         "screenshot"
     ]
 
@@ -805,13 +808,13 @@ async def user_chatbot_conversation():
                 print("Quitting the conversation...")
                 break
             conversation_history.append({"role": "user", "content": user_input})
-            
+
             if any(phrase in user_input.lower() for phrase in screenshot_phrases):
                 await execute_screenshot_and_analyze()  # Note the 'await' here
                 continue
-            
+
             mood = analyze_mood(user_input)
-            
+
             print(PINK + f"{character_display_name}:..." + RESET_COLOR)
             chatbot_response = chatgpt_streamed(user_input, base_system_message, mood, conversation_history)
             conversation_history.append({"role": "assistant", "content": chatbot_response})

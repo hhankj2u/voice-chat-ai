@@ -53,6 +53,7 @@
         </div>
         <div class="controls">
             <button id="start-conversation-btn">Start</button>
+            <button id="stop-recording-btn">Stop recording</button>
             <button id="stop-conversation-btn">Stop</button>
             <button id="clear-conversation-btn">Clear</button>
         </div>
@@ -146,19 +147,6 @@
     <script src="/app/static/js/scripts.js"></script>
     <script>
         document.addEventListener("DOMContentLoaded", function() {
-            fetch('/characters')
-                .then(response => response.json())
-                .then(data => {
-                    const characterSelect = document.getElementById('character-select');
-                    data.characters.forEach(character => {
-                        const option = document.createElement('option');
-                        option.value = character;
-                        option.text = character.replace('_', ' ');
-                        characterSelect.add(option);
-                    });
-                    characterSelect.value = "{{ character_name }}";
-                });
-
             fetch('/elevenlabs_voices')
                 .then(response => response.json())
                 .then(data => {
